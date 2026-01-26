@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../services/database_service.dart';
 import '../models/calibration_system.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class DatabaseManagerScreen extends StatefulWidget {
   const DatabaseManagerScreen({Key? key}) : super(key: key);
@@ -11,22 +12,63 @@ class DatabaseManagerScreen extends StatefulWidget {
   State<DatabaseManagerScreen> createState() => _DatabaseManagerScreenState();
 }
 
-class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
+class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> with WidgetsBindingObserver {
   Database? _database;
   List<String> _vehicleMakes = [];
   List<String> _years = [];
   List<String> _models = [];
+  List<String> _systemTypes = [];  // Protech Generic System Names
   List<Map<String, dynamic>> _currentSystems = [];
   bool _isLoading = true;
   String _searchQuery = '';
   String? _selectedVehicleMake;
   String? _selectedYear;
   String? _selectedModel;
+  String? _selectedSystemType;  // Selected Protech Generic System Name
+  bool _hasInitialized = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Load on first display
+    if (!_hasInitialized) {
+      _hasInitialized = true;
+      _initDatabase();
+    }
+  }
+
+  @override
+  void didUpdateWidget(DatabaseManagerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Reload when widget updates (e.g., returning from another screen)
     _initDatabase();
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    // Reload when screen becomes active again
+    _initDatabase();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Refresh when app comes back to foreground
+    if (state == AppLifecycleState.resumed) {
+      _initDatabase();
+    }
   }
 
   Future<void> _initDatabase() async {
@@ -34,7 +76,19 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
       final dbService = context.read<DatabaseService>();
       _database = dbService.databaseSync;
       if (_database != null) {
+        // Always load fresh data from database
         await _loadVehicleMakes();
+        
+        // Reload based on current navigation level
+        if (_selectedSystemType != null && _selectedModel != null && _selectedYear != null && _selectedVehicleMake != null) {
+          await _loadSystemsForVehicleAndType(_selectedVehicleMake!, _selectedYear!, _selectedModel!, _selectedSystemType!);
+        } else if (_selectedModel != null && _selectedYear != null && _selectedVehicleMake != null) {
+          await _loadSystemTypesForVehicle(_selectedVehicleMake!, _selectedYear!, _selectedModel!);
+        } else if (_selectedYear != null && _selectedVehicleMake != null) {
+          await _loadModelsForMakeAndYear(_selectedVehicleMake!, _selectedYear!);
+        } else if (_selectedVehicleMake != null) {
+          await _loadYearsForMake(_selectedVehicleMake!);
+        }
       } else {
         throw Exception('Database not initialized');
       }
@@ -49,8 +103,17 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
   }
 
   String get _currentTitle {
+    if (_selectedSystemType != null) {
+      return '$_selectedVehicleMake $_selectedYear $_selectedModel - $_selectedSystemType';
+    }
+    if (_selectedModel != null) {
+      return '$_selectedVehicleMake $_selectedYear $_selectedModel - Systems';
+    }
+    if (_selectedYear != null) {
+      return '$_selectedVehicleMake $_selectedYear - Models';
+    }
     if (_selectedVehicleMake != null) {
-      return '$_selectedVehicleMake Systems';
+      return '$_selectedVehicleMake - Years';
     }
     return 'Calibration Database';
   }
@@ -65,22 +128,26 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
       
       print('🔍 Analyzing ${systems.length} systems for vehicle makes...');
       
-      // Extract unique makes from system names AND adas_keywords
+      // Extract unique makes from vehicle_make column (primary) or fallback to extraction
       final makeSet = <String>{};
       for (final system in systems) {
-        final name = system['name']?.toString() ?? '';
-        final keywords = system['adas_keywords']?.toString() ?? '';
+        // First try the dedicated vehicle_make column
+        String make = system['vehicle_make']?.toString().trim() ?? '';
         
-        // Try to extract from name first
-        String make = _extractVehicleMake(name);
-        
-        // If not found in name, try keywords (where Excel import stores the Make)
-        if (make == 'UNKNOWN' && keywords.isNotEmpty) {
+        // If vehicle_make is empty, try to extract from adas_keywords or name (legacy fallback)
+        if (make.isEmpty) {
+          final keywords = system['adas_keywords']?.toString() ?? '';
+          final name = system['name']?.toString() ?? '';
+          
           make = _extractVehicleMake(keywords);
+          if (make == 'UNKNOWN') {
+            make = _extractVehicleMake(name);
+          }
         }
         
-        if (make != 'UNKNOWN') {
-          makeSet.add(make);
+        if (make.isNotEmpty && make != 'UNKNOWN') {
+          // Normalize to uppercase for consistency
+          makeSet.add(make.toUpperCase());
         }
       }
       
@@ -94,8 +161,7 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
       print('✅ Found ${makes.length} vehicle makes in calibration_systems table');
       if (makes.isEmpty && systems.isNotEmpty) {
         print('⚠️  Warning: Found ${systems.length} systems but no vehicle makes could be extracted');
-        print('   Sample system name: ${systems.first['name']}');
-        print('   Sample keywords: ${systems.first['adas_keywords']}');
+        print('   Sample system: ${systems.first}');
       }
     } catch (e) {
       setState(() => _isLoading = false);
@@ -115,21 +181,23 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
       // Query systems for this make
       final systems = await _database!.query('calibration_systems');
       
-      // Extract unique years from system names that match this make
+      // Extract unique years from vehicle_year column that match this make
       final yearSet = <String>{};
       for (final system in systems) {
-        final name = system['name']?.toString() ?? '';
-        final keywords = system['adas_keywords']?.toString() ?? '';
-        
-        // Check if this system matches the make (check both name and keywords)
-        String systemMake = _extractVehicleMake(name);
-        if (systemMake == 'UNKNOWN') {
+        // Get the system's make - use vehicle_make column first, then fallback to extraction
+        String systemMake = system['vehicle_make']?.toString().trim().toUpperCase() ?? '';
+        if (systemMake.isEmpty) {
+          final keywords = system['adas_keywords']?.toString() ?? '';
+          final name = system['name']?.toString() ?? '';
           systemMake = _extractVehicleMake(keywords);
+          if (systemMake == 'UNKNOWN') {
+            systemMake = _extractVehicleMake(name);
+          }
         }
         
         if (systemMake == make) {
-          // Extract year from name (most Excel files include year in a column that might be in name)
-          final year = _extractYear(name);
+          // Use vehicle_year column directly
+          final year = system['vehicle_year']?.toString().trim() ?? '';
           if (year.isNotEmpty) {
             yearSet.add(year);
           }
@@ -162,14 +230,25 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
       // Query systems for this make and year
       final systems = await _database!.query('calibration_systems');
       
-      // Extract unique models from system names that match this make and year
+      // Extract unique models from vehicle_model column that match this make and year
       final modelSet = <String>{};
       for (final system in systems) {
-        final name = system['name']?.toString() ?? '';
-        final systemMake = _extractVehicleMake(name);
-        final systemYear = _extractYear(name);
+        final systemYear = system['vehicle_year']?.toString().trim() ?? '';
+        
+        // Get the system's make - use vehicle_make column first, then fallback to extraction
+        String systemMake = system['vehicle_make']?.toString().trim().toUpperCase() ?? '';
+        if (systemMake.isEmpty) {
+          final keywords = system['adas_keywords']?.toString() ?? '';
+          final name = system['name']?.toString() ?? '';
+          systemMake = _extractVehicleMake(keywords);
+          if (systemMake == 'UNKNOWN') {
+            systemMake = _extractVehicleMake(name);
+          }
+        }
+        
         if (systemMake == make && systemYear == year) {
-          final model = _extractModel(name, make, year);
+          // Use vehicle_model column directly
+          final model = system['vehicle_model']?.toString().trim() ?? '';
           if (model.isNotEmpty) {
             modelSet.add(model);
           }
@@ -194,7 +273,8 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
     }
   }
 
-  Future<void> _loadSystemsForVehicle(String make, String year, String model) async {
+  /// Load unique system types (Protech Generic System Names) for a specific vehicle
+  Future<void> _loadSystemTypesForVehicle(String make, String year, String model) async {
     setState(() => _isLoading = true);
     try {
       if (_database == null) throw Exception('Database not initialized');
@@ -202,14 +282,75 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
       // Query all systems and filter by make/year/model
       final systems = await _database!.query('calibration_systems');
       
-      final matchingSystems = <Map<String, dynamic>>[];
+      // Extract unique system names (Protech Generic System Names) for this vehicle
+      final systemTypeSet = <String>{};
       for (final system in systems) {
-        final name = system['name']?.toString() ?? '';
-        final systemMake = _extractVehicleMake(name);
-        final systemYear = _extractYear(name);
-        final systemModel = _extractModel(name, make, year);
+        final systemName = system['name']?.toString() ?? '';
+        final systemYear = system['vehicle_year']?.toString().trim() ?? '';
+        final systemModel = system['vehicle_model']?.toString().trim() ?? '';
+        
+        // Get the system's make - use vehicle_make column first, then fallback to extraction
+        String systemMake = system['vehicle_make']?.toString().trim().toUpperCase() ?? '';
+        if (systemMake.isEmpty) {
+          final keywords = system['adas_keywords']?.toString() ?? '';
+          systemMake = _extractVehicleMake(keywords);
+          if (systemMake == 'UNKNOWN') {
+            systemMake = _extractVehicleMake(systemName);
+          }
+        }
         
         if (systemMake == make && systemYear == year && systemModel == model) {
+          // Use the name field which contains "Protech Generic System Name"
+          if (systemName.isNotEmpty) {
+            systemTypeSet.add(systemName);
+          }
+        }
+      }
+      
+      final systemTypes = systemTypeSet.toList()..sort();
+      
+      setState(() {
+        _systemTypes = systemTypes;
+        _isLoading = false;
+      });
+      
+      print('✅ Found ${systemTypes.length} system types for $make $year $model');
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading system types: $e')),
+        );
+      }
+    }
+  }
+
+  /// Load individual system records for a specific vehicle and system type
+  Future<void> _loadSystemsForVehicleAndType(String make, String year, String model, String systemType) async {
+    setState(() => _isLoading = true);
+    try {
+      if (_database == null) throw Exception('Database not initialized');
+      
+      // Query all systems and filter by make/year/model/systemType
+      final systems = await _database!.query('calibration_systems');
+      
+      final matchingSystems = <Map<String, dynamic>>[];
+      for (final system in systems) {
+        final systemName = system['name']?.toString() ?? '';
+        final systemYear = system['vehicle_year']?.toString().trim() ?? '';
+        final systemModel = system['vehicle_model']?.toString().trim() ?? '';
+        
+        // Get the system's make - use vehicle_make column first, then fallback to extraction
+        String systemMake = system['vehicle_make']?.toString().trim().toUpperCase() ?? '';
+        if (systemMake.isEmpty) {
+          final keywords = system['adas_keywords']?.toString() ?? '';
+          systemMake = _extractVehicleMake(keywords);
+          if (systemMake == 'UNKNOWN') {
+            systemMake = _extractVehicleMake(systemName);
+          }
+        }
+        
+        if (systemMake == make && systemYear == year && systemModel == model && systemName == systemType) {
           matchingSystems.add(system);
         }
       }
@@ -219,7 +360,7 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
         _isLoading = false;
       });
       
-      print('✅ Found ${matchingSystems.length} systems for $make $year $model');
+      print('✅ Found ${matchingSystems.length} records for $make $year $model - $systemType');
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -269,13 +410,233 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
 
   void _goBack() {
     setState(() {
-      if (_selectedVehicleMake != null) {
-        // Go back from systems to makes
-        _selectedVehicleMake = null;
+      if (_selectedSystemType != null) {
+        // Go back from individual records to system types
+        _selectedSystemType = null;
         _currentSystems = [];
         _searchQuery = '';
+      } else if (_selectedModel != null) {
+        // Go back from system types to models
+        _selectedModel = null;
+        _systemTypes = [];
+      } else if (_selectedYear != null) {
+        // Go back from models to years
+        _selectedYear = null;
+        _models = [];
+      } else if (_selectedVehicleMake != null) {
+        // Go back from years to makes
+        _selectedVehicleMake = null;
+        _years = [];
       }
     });
+  }
+
+  Future<void> _showClearAllConfirmation() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Clear All Data?'),
+          ],
+        ),
+        content: const Text(
+          'This will permanently delete ALL calibration systems from the database.\n\n'
+          'This action cannot be undone!',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete All', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _clearAllData();
+    }
+  }
+
+  Future<void> _clearAllData() async {
+    try {
+      if (_database == null) return;
+      
+      await _database!.delete('calibration_systems');
+      
+      setState(() {
+        _vehicleMakes = [];
+        _years = [];
+        _models = [];
+        _systemTypes = [];
+        _currentSystems = [];
+        _selectedVehicleMake = null;
+        _selectedYear = null;
+        _selectedModel = null;
+        _selectedSystemType = null;
+      });
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ All data cleared successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error clearing data: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showDeleteMakeConfirmation(String make) async {
+    final count = _currentSystems.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.warning, color: Colors.orange),
+            const SizedBox(width: 8),
+            Text('Delete $make?'),
+          ],
+        ),
+        content: Text(
+          'This will delete $count system${count == 1 ? '' : 's'} for $make.\n\n'
+          'This action cannot be undone!',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _deleteSystemsForMake(make);
+    }
+  }
+
+  Future<void> _deleteSystemsForMake(String make) async {
+    try {
+      if (_database == null) return;
+      
+      int deletedCount = 0;
+      for (final system in _currentSystems) {
+        await _database!.delete(
+          'calibration_systems',
+          where: 'id = ?',
+          whereArgs: [system['id']],
+        );
+        deletedCount++;
+      }
+      
+      // Go back to vehicle list and refresh
+      setState(() {
+        _selectedVehicleMake = null;
+        _selectedYear = null;
+        _selectedModel = null;
+        _selectedSystemType = null;
+        _years = [];
+        _models = [];
+        _systemTypes = [];
+        _currentSystems = [];
+      });
+      await _loadVehicleMakes();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✓ Deleted $deletedCount systems for $make'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting systems: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteSystem(Map<String, dynamic> system) async {
+    final name = system['name']?.toString() ?? 'this system';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.delete, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Delete System?'),
+          ],
+        ),
+        content: Text('Delete "$name"?\n\nThis cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        if (_database == null) return;
+        
+        await _database!.delete(
+          'calibration_systems',
+          where: 'id = ?',
+          whereArgs: [system['id']],
+        );
+        
+        // Refresh current view
+        if (_selectedSystemType != null) {
+          await _loadSystemsForVehicleAndType(_selectedVehicleMake!, _selectedYear!, _selectedModel!, _selectedSystemType!);
+        }
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✓ System deleted'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error deleting system: $e')),
+          );
+        }
+      }
+    }
   }
 
   List<Map<String, dynamic>> get _filteredSystems {
@@ -292,6 +653,7 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
   @override
   Widget build(BuildContext context) {
     final showBackButton = _selectedVehicleMake != null;
+    final showSearchBar = _selectedSystemType != null; // Only show search when viewing individual records
     
     return Scaffold(
       appBar: AppBar(
@@ -308,12 +670,49 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
             onPressed: _refresh,
             tooltip: 'Refresh',
           ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'More options',
+            onSelected: (value) {
+              switch (value) {
+                case 'clear_all':
+                  _showClearAllConfirmation();
+                  break;
+                case 'delete_make':
+                  if (_selectedVehicleMake != null) {
+                    _showDeleteMakeConfirmation(_selectedVehicleMake!);
+                  }
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'clear_all',
+                child: ListTile(
+                  leading: const Icon(Icons.delete_forever, color: Colors.red),
+                  title: const Text('Clear All Data'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+              if (_selectedSystemType != null)
+                PopupMenuItem(
+                  value: 'delete_make',
+                  child: ListTile(
+                    leading: const Icon(Icons.delete_sweep, color: Colors.orange),
+                    title: Text('Delete All $_selectedVehicleMake'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
       body: Column(
         children: [
-          if (_selectedVehicleMake != null) _buildSearchBar(),
-          if (_selectedVehicleMake != null) _buildSystemCount(),
+          if (showSearchBar) _buildSearchBar(),
+          if (showSearchBar) _buildSystemCount(),
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -324,60 +723,59 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
     );
   }
 
-  void _refresh() {
-    if (_selectedVehicleMake != null) {
-      _loadSystemsForMake(_selectedVehicleMake!);
-    } else {
-      _loadVehicleMakes();
-    }
-  }
-
-  Future<void> _loadSystemsForMake(String make) async {
+  Future<void> _refresh() async {
     setState(() => _isLoading = true);
+    
     try {
-      if (_database == null) throw Exception('Database not initialized');
-      
-      // Query all systems and filter by make
-      final systems = await _database!.query('calibration_systems');
-      
-      final matchingSystems = <Map<String, dynamic>>[];
-      for (final system in systems) {
-        final name = system['name']?.toString() ?? '';
-        final keywords = system['adas_keywords']?.toString() ?? '';
-        
-        // Check if this system matches the make (check both name and keywords)
-        String systemMake = _extractVehicleMake(name);
-        if (systemMake == 'UNKNOWN') {
-          systemMake = _extractVehicleMake(keywords);
-        }
-        
-        if (systemMake == make) {
-          matchingSystems.add(system);
-        }
+      if (_selectedSystemType != null) {
+        await _loadSystemsForVehicleAndType(_selectedVehicleMake!, _selectedYear!, _selectedModel!, _selectedSystemType!);
+      } else if (_selectedModel != null) {
+        await _loadSystemTypesForVehicle(_selectedVehicleMake!, _selectedYear!, _selectedModel!);
+      } else if (_selectedYear != null) {
+        await _loadModelsForMakeAndYear(_selectedVehicleMake!, _selectedYear!);
+      } else if (_selectedVehicleMake != null) {
+        await _loadYearsForMake(_selectedVehicleMake!);
+      } else {
+        await _loadVehicleMakes();
       }
       
-      setState(() {
-        _currentSystems = matchingSystems;
-        _isLoading = false;
-      });
-      
-      print('✅ Found ${matchingSystems.length} systems for $make');
-    } catch (e) {
-      setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading systems: $e')),
+          const SnackBar(
+            content: Text('✓ Database refreshed'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error refreshing: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
   }
 
+
   Widget _buildCurrentView() {
-    if (_selectedVehicleMake != null) {
-      // Level 2: Show systems for selected make
+    if (_selectedSystemType != null) {
+      // Level 5: Show individual records for selected make/year/model/system type
       return _filteredSystems.isEmpty
           ? _buildEmptyState()
           : _buildSystemsList();
+    } else if (_selectedModel != null) {
+      // Level 4: Show system types (Protech Generic System Names) for selected make/year/model
+      return _buildSystemTypesList();
+    } else if (_selectedYear != null) {
+      // Level 3: Show models for selected make/year
+      return _buildModelsList();
+    } else if (_selectedVehicleMake != null) {
+      // Level 2: Show years for selected make
+      return _buildYearsList();
     } else {
       // Level 1: Show vehicle makes
       return _buildVehicleList();
@@ -415,17 +813,23 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
             Icon(Icons.directions_car_outlined, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 16),
             Text(
-              'No vehicles found in NiccDB.db',
+              'No vehicles found in database',
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
                     color: Colors.grey[600],
                   ),
             ),
             const SizedBox(height: 8),
             Text(
-              'Make sure NiccDB.db is in the app root folder',
+              'Import data using "Update Database" first',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: Colors.grey[500],
                   ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh'),
+              onPressed: _refresh,
             ),
           ],
         ),
@@ -455,13 +859,13 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            subtitle: const Text('Tap to view systems'),
+            subtitle: const Text('Tap to view years'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () async {
               setState(() {
                 _selectedVehicleMake = make;
               });
-              await _loadSystemsForMake(make);
+              await _loadYearsForMake(make);
             },
           ),
         );
@@ -573,7 +977,72 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
               setState(() {
                 _selectedModel = model;
               });
-              await _loadSystemsForVehicle(_selectedVehicleMake!, _selectedYear!, model);
+              await _loadSystemTypesForVehicle(_selectedVehicleMake!, _selectedYear!, model);
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSystemTypesList() {
+    if (_systemTypes.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.settings_input_component, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              'No systems found',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: Colors.grey[600],
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No calibration systems available for this vehicle',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.grey[500],
+                  ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: _systemTypes.length,
+      itemBuilder: (context, index) {
+        final systemType = _systemTypes[index];
+        
+        return Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: ListTile(
+            leading: CircleAvatar(
+              backgroundColor: Colors.purple,
+              child: const Icon(
+                Icons.settings_input_component,
+                color: Colors.white,
+              ),
+            ),
+            title: Text(
+              systemType,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: const Text('Tap to view details'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              setState(() {
+                _selectedSystemType = systemType;
+              });
+              await _loadSystemsForVehicleAndType(_selectedVehicleMake!, _selectedYear!, _selectedModel!, systemType);
             },
           ),
         );
@@ -673,6 +1142,17 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.red),
+              onPressed: () => _deleteSystem(system),
+              tooltip: 'Delete this system',
+            ),
+            const Icon(Icons.expand_more),
+          ],
+        ),
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
@@ -681,17 +1161,14 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
               children: [
                 _buildDetailRow('ID', system['id']?.toString() ?? ''),
                 _buildDetailRow('Name', system['name']?.toString() ?? ''),
-                _buildDetailRow('Description', system['description']?.toString() ?? ''),
+                _buildDetailRow('Vehicle Make', system['vehicle_make']?.toString() ?? ''),
+                _buildDetailRow('Vehicle Year', system['vehicle_year']?.toString() ?? ''),
+                _buildDetailRow('Vehicle Model', system['vehicle_model']?.toString() ?? ''),
                 _buildDetailRow('Category', system['category']?.toString() ?? ''),
-                _buildDetailRow('Estimated Time', system['estimated_time']?.toString() ?? ''),
-                _buildDetailRow('Estimated Cost', system['estimated_cost']?.toString() ?? ''),
-                _buildDetailRow('Equipment Needed', system['equipment_needed']?.toString() ?? ''),
-                _buildDetailRow('Required For', system['required_for']?.toString() ?? ''),
-                _buildDetailRow('Pre-Qualifications', system['pre_qualifications']?.toString() ?? ''),
+                // Hidden fields: Estimated Time, Estimated Cost, Equipment Needed, Required For, Description, ADAS Keywords
+                _buildPreQualificationsSection(system['pre_qualifications']?.toString() ?? ''),
                 if (system['hyperlink']?.toString().isNotEmpty ?? false)
-                  _buildDetailRow('Hyperlink', system['hyperlink']!.toString()),
-                _buildDetailRow('ADAS Keywords', system['adas_keywords']?.toString() ?? ''),
-                _buildDetailRow('Priority', system['priority']?.toString() ?? ''),
+                  _buildHyperlinkButton(system['hyperlink']!.toString()),
               ],
             ),
           ),
@@ -719,5 +1196,191 @@ class _DatabaseManagerScreenState extends State<DatabaseManagerScreen> {
         ],
       ),
     );
+  }
+
+  /// Build Pre-Qualifications section with better formatting
+  Widget _buildPreQualificationsSection(String preQuals) {
+    // Check if empty
+    if (preQuals.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(
+              width: 160,
+              child: Text(
+                'Pre-Qualifications:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                '(none specified)',
+                style: TextStyle(color: Colors.grey[500], fontStyle: FontStyle.italic),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Parse pre-qualifications - they may be comma-separated or newline-separated
+    List<String> items = [];
+    if (preQuals.contains('\n')) {
+      items = preQuals.split('\n');
+    } else if (preQuals.contains(',')) {
+      items = preQuals.split(',');
+    } else {
+      items = [preQuals];
+    }
+    
+    // Clean up items
+    items = items.map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
+
+    if (items.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(
+              width: 160,
+              child: Text(
+                'Pre-Qualifications:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                '(none specified)',
+                style: TextStyle(color: Colors.grey[500], fontStyle: FontStyle.italic),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.checklist, size: 20, color: Colors.orange),
+              SizedBox(width: 8),
+              Text(
+                'Pre-Qualifications:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.orange.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: items.map((item) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.check_circle, size: 16, color: Colors.orange.shade700),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SelectableText(
+                        item,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Colors.black87,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Strip URLs from text
+  String _stripUrls(String text) {
+    if (text.isEmpty) return text;
+    // Remove URLs (http, https, www)
+    return text
+        .replaceAll(RegExp(r'https?://[^\s]+'), '')
+        .replaceAll(RegExp(r'www\.[^\s]+'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  /// Build a clickable hyperlink button
+  Widget _buildHyperlinkButton(String url) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(
+            width: 160,
+            child: Text(
+              'Service Info:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.open_in_new, size: 18),
+              label: const Text('View Documentation'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              ),
+              onPressed: () => _openUrl(url),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Open URL in the default browser
+  Future<void> _openUrl(String url) async {
+    try {
+      final Uri uri = Uri.parse(url);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not open the link'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error opening link: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 }

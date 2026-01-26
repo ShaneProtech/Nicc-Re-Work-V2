@@ -194,3 +194,6 @@ Based on the console output (21,040 rows in first file):
 **Workaround**: Import smaller batches, watch console, be patient
 
 
+
+
+

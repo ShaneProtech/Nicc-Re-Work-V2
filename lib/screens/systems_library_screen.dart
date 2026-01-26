@@ -48,6 +48,8 @@ class _SystemsLibraryScreenState extends State<SystemsLibraryScreen> {
   }
 
   Widget _buildAppBar() {
+    final provider = context.read<CalibrationProvider>();
+    
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Row(
@@ -63,9 +65,27 @@ class _SystemsLibraryScreenState extends State<SystemsLibraryScreen> {
             size: 28,
           ),
           const SizedBox(width: 12),
-          Text(
-            'Systems Library',
-            style: Theme.of(context).textTheme.headlineMedium,
+          Expanded(
+            child: Text(
+              'Systems Library',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh database',
+            onPressed: () async {
+              await provider.refreshData();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('✓ Database refreshed'),
+                    backgroundColor: Colors.green,
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              }
+            },
           ),
         ],
       ).animate().fadeIn().slideX(begin: -0.2, end: 0),

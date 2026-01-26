@@ -30,7 +30,7 @@ class DatabaseService {
       return await databaseFactory.openDatabase(
         path,
         options: OpenDatabaseOptions(
-          version: 2, // Increased version to trigger migration
+          version: 4, // Increased version to add vehicle_make column
           onCreate: _createDatabase,
           onUpgrade: _upgradeDatabase,
         ),
@@ -43,7 +43,7 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 2, // Increased version to trigger migration
+      version: 4, // Increased version to add vehicle_make column
       onCreate: _createDatabase,
       onUpgrade: _upgradeDatabase,
     );
@@ -58,6 +58,15 @@ class DatabaseService {
       
       // Update existing records with new data
       await _updateExistingSystemsWithNewData(db);
+    }
+    if (oldVersion < 3) {
+      // Add vehicle_year and vehicle_model columns for version 3
+      await db.execute('ALTER TABLE calibration_systems ADD COLUMN vehicle_year TEXT DEFAULT ""');
+      await db.execute('ALTER TABLE calibration_systems ADD COLUMN vehicle_model TEXT DEFAULT ""');
+    }
+    if (oldVersion < 4) {
+      // Add vehicle_make column for version 4
+      await db.execute('ALTER TABLE calibration_systems ADD COLUMN vehicle_make TEXT DEFAULT ""');
     }
   }
 
@@ -297,7 +306,10 @@ class DatabaseService {
         priority INTEGER,
         pre_qualifications TEXT,
         hyperlink TEXT,
-        adas_keywords TEXT
+        adas_keywords TEXT,
+        vehicle_year TEXT,
+        vehicle_model TEXT,
+        vehicle_make TEXT
       )
     ''');
 

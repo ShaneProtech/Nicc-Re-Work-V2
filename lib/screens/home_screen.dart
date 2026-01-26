@@ -244,6 +244,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         'description': 'Import ADAS data from Excel files',
         'color': const Color(0xFF4CAF50),
         'route': const DatabaseUpdateScreen(),
+        'refreshOnReturn': true,
       },
       {
         'icon': Icons.storage,
@@ -251,6 +252,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         'description': 'Browse imported calibration data',
         'color': const Color(0xFF9C27B0),
         'route': const DatabaseManagerScreen(),
+        'refreshOnReturn': true,
       },
     ];
 
@@ -259,10 +261,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 1.0,
+          crossAxisCount: 4,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 1.8,
         ),
         itemCount: features.length,
         itemBuilder: (context, index) {
@@ -278,13 +280,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   title: feature['title'] as String,
                   description: feature['description'] as String,
                   color: feature['color'] as Color,
-                  onTap: () {
-                    Navigator.push(
+                  onTap: () async {
+                    await Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => feature['route'] as Widget,
                       ),
                     );
+                    // Refresh data if returning from database-related screens
+                    if (feature['refreshOnReturn'] == true && mounted) {
+                      context.read<CalibrationProvider>().refreshData();
+                    }
                   },
                 ),
               ),
@@ -299,10 +305,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Quick Stats',
-          style: Theme.of(context).textTheme.headlineSmall,
-        ).animate().fadeIn(delay: 400.ms),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Quick Stats',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ).animate().fadeIn(delay: 400.ms),
+            IconButton(
+              icon: provider.isLoading 
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+              tooltip: 'Refresh database stats',
+              onPressed: provider.isLoading 
+                  ? null 
+                  : () async {
+                      await provider.refreshData();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('✓ Database refreshed'),
+                            backgroundColor: Colors.green,
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                    },
+            ).animate().fadeIn(delay: 400.ms),
+          ],
+        ),
         const SizedBox(height: 16),
         Row(
           children: [

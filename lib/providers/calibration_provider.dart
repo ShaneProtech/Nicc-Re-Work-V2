@@ -47,6 +47,24 @@ class CalibrationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Public method to refresh all data from the database
+  Future<void> refreshData() async {
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      _allSystems = await _databaseService.getAllSystems();
+      _recentResults = await _databaseService.getRecentResults();
+      _ollamaAvailable = await _ollamaService.isAvailable();
+      _errorMessage = null;
+    } catch (e) {
+      _errorMessage = 'Failed to refresh: ${e.toString()}';
+    }
+
+    _isLoading = false;
+    notifyListeners();
+  }
+
   Future<void> analyzeEstimate(String estimateText) async {
     _isLoading = true;
     _errorMessage = null;

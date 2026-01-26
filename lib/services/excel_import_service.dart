@@ -201,7 +201,8 @@ class ExcelImportService {
     return adasColumns.any((col) => lowerHeaders.any((h) => h.contains(col)));
   }
 
-  /// Import ADAS systems from an Excel sheet by UPDATING existing records
+  /// Import ADAS systems from an Excel sheet - UPDATE existing or INSERT new
+  /// Each unique combination of name + year + model creates a separate record
   Future<int> _importADASSystemsFromSheet(
     Sheet sheet,
     List<String> headers,
@@ -215,17 +216,36 @@ class ExcelImportService {
       return 0;
     }
 
+    // Must have a name column to import
+    if (!columnMap.containsKey('name')) {
+      print('   ⊘ No system name column found - skipping this sheet');
+      return 0;
+    }
+
     print('   Found ${columnMap.length} matching database columns');
     
-    // Get all existing systems from database
+    // Get all existing systems from database for matching
     final existingSystems = await database.query('calibration_systems');
-    print('   Database has ${existingSystems.length} existing records to match against');
+    print('   Database has ${existingSystems.length} existing records');
+    
+    // Build a lookup map for existing records by compound key (name + make + year + model)
+    final existingByKey = <String, Map<String, dynamic>>{};
+    for (final record in existingSystems) {
+      final name = (record['name'] as String?)?.toLowerCase() ?? '';
+      final make = (record['vehicle_make'] as String?)?.toLowerCase().trim() ?? '';
+      final year = (record['vehicle_year'] as String?)?.toLowerCase().trim() ?? '';
+      final model = (record['vehicle_model'] as String?)?.toLowerCase().trim() ?? '';
+      final key = '$name|$make|$year|$model';
+      existingByKey[key] = record;
+    }
     
     int updatedCount = 0;
+    int insertedCount = 0;
     
-    print('   Matching Excel rows to database records...');
+    print('   Processing Excel rows...');
     
-    // Process each row and update matching records
+    // Process each row - update if exists, insert if new
+    // Match by COMPOUND KEY: name + year + model (so each vehicle/system combo is unique)
     await database.transaction((txn) async {
       for (int i = headerRowIndex + 1; i < sheet.rows.length; i++) {
         final row = sheet.rows[i];
@@ -236,15 +256,8 @@ class ExcelImportService {
           final excelSystemName = _getCellValue(row, columnMap['name']);
           if (excelSystemName == null || excelSystemName.isEmpty) continue;
           
-          // Find matching record in database by name (case-insensitive)
-          final matchingRecord = existingSystems.where(
-            (record) => (record['name'] as String).toLowerCase() == excelSystemName.toLowerCase(),
-          ).firstOrNull;
-          
-          if (matchingRecord == null) continue; // No match found
-          
-          // Build update map with only the columns that exist in Excel
-          final updateData = <String, dynamic>{};
+          // Build data map with all columns from Excel
+          final rowData = <String, dynamic>{};
           
           for (final entry in columnMap.entries) {
             final dbColumn = entry.key;
@@ -252,19 +265,64 @@ class ExcelImportService {
             
             final value = _getCellValue(row, excelColumnIndex);
             if (value != null && value.isNotEmpty) {
-              updateData[dbColumn] = value;
+              rowData[dbColumn] = value;
             }
           }
           
-          if (updateData.isNotEmpty) {
-            // Update the existing record
+          if (rowData.isEmpty) continue;
+          
+          // Get make, year and model for compound key
+          final excelMake = (rowData['vehicle_make'] as String?)?.toLowerCase().trim() ?? '';
+          final excelYear = (rowData['vehicle_year'] as String?)?.toLowerCase().trim() ?? '';
+          final excelModel = (rowData['vehicle_model'] as String?)?.toLowerCase().trim() ?? '';
+          final compoundKey = '${excelSystemName.toLowerCase()}|$excelMake|$excelYear|$excelModel';
+          
+          // Find matching record in database by compound key (name + make + year + model)
+          final matchingRecord = existingByKey[compoundKey];
+          
+          if (matchingRecord != null) {
+            // UPDATE existing record
             await txn.update(
               'calibration_systems',
-              updateData,
+              rowData,
               where: 'id = ?',
               whereArgs: [matchingRecord['id']],
             );
             updatedCount++;
+          } else {
+            // INSERT new record - generate unique ID from name + make + year + model
+            final idBase = excelSystemName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
+            final makePart = excelMake.isNotEmpty ? '_${excelMake.replaceAll(RegExp(r'[^a-z0-9]'), '_')}' : '';
+            final yearPart = excelYear.isNotEmpty ? '_$excelYear' : '';
+            final modelPart = excelModel.isNotEmpty ? '_${excelModel.replaceAll(RegExp(r'[^a-z0-9]'), '_')}' : '';
+            final id = '$idBase$makePart$yearPart$modelPart';
+            rowData['id'] = id;
+            
+            // Set defaults for required fields if not present
+            rowData['name'] ??= excelSystemName;
+            rowData['description'] ??= '';
+            rowData['category'] ??= '';
+            rowData['estimated_time'] ??= '';
+            rowData['estimated_cost'] ??= '';
+            rowData['equipment_needed'] ??= '';
+            rowData['required_for'] ??= '';
+            rowData['pre_qualifications'] ??= '';
+            rowData['hyperlink'] ??= '';
+            rowData['adas_keywords'] ??= '';
+            rowData['priority'] ??= 0;
+            rowData['vehicle_year'] ??= '';
+            rowData['vehicle_model'] ??= '';
+            rowData['vehicle_make'] ??= '';
+            
+            await txn.insert(
+              'calibration_systems',
+              rowData,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+            insertedCount++;
+            
+            // Add to lookup map so subsequent rows with same key update instead of insert
+            existingByKey[compoundKey] = {'id': id, ...rowData};
           }
         } catch (e) {
           // Silently skip invalid rows
@@ -278,7 +336,16 @@ class ExcelImportService {
     });
 
     print('   ✓ Updated $updatedCount existing records');
-    return updatedCount;
+    print('   ✓ Inserted $insertedCount new records');
+    
+    // Debug: Check if pre_qualifications was mapped
+    if (columnMap.containsKey('pre_qualifications')) {
+      print('   ✅ Pre-qualifications column WAS mapped (column index: ${columnMap['pre_qualifications']})');
+    } else {
+      print('   ⚠️ Pre-qualifications column was NOT mapped - check column headers');
+    }
+    
+    return updatedCount + insertedCount;
   }
   
   /// Map Excel column headers directly to database column names (for updating only)
@@ -286,36 +353,85 @@ class ExcelImportService {
     final map = <String, int>{};
     
     print('   📋 Mapping Excel columns to database columns:');
+    print('   📋 Excel headers found (${headers.length} columns):');
+    for (int i = 0; i < headers.length; i++) {
+      final h = headers[i];
+      final lower = h.toLowerCase();
+      // Highlight potential pre-qual/pre-req columns
+      if (lower.contains('pre-qual') || lower.contains('prequal') || 
+          lower.contains('pre-req') || lower.contains('prereq') ||
+          lower.contains('prerequisite')) {
+        print('      Column $i: "${headers[i]}" ⭐ PRE-QUAL/PRE-REQ DETECTED');
+      } else {
+        print('      Column $i: "${headers[i]}"');
+      }
+    }
     
     // Define the database columns we want to update
+    // Order matters - more specific matches should come first
+    // For vehicle_year and vehicle_model, we need to be careful not to match "model" in "model year"
     final dbColumns = {
-      'name': ['name', 'system', 'system name', 'protech generic system name'],
-      'description': ['description', 'desc'],
-      'category': ['category', 'type', 'parent component', 'component'],
-      'estimated_time': ['time', 'duration', 'estimated time'],
-      'estimated_cost': ['cost', 'price', 'estimated cost'],
-      'pre_qualifications': ['pre-qual', 'prequalification', 'prerequisite', 'calibration prerequisites', 'calibration prerequisites short hand'],
-      'hyperlink': ['hyperlink', 'link', 'url', 'service information hyperlink', 'oe glass service info hyperlink'],
-      'adas_keywords': ['keyword', 'search', 'make', 'oem', 'manufacturer'],
-      'required_for': ['required', 'trigger', 'required for'],
-      'equipment_needed': ['equipment', 'tool', 'equipment needed'],
+      'name': ['protech generic system name', 'oem adas system name', 'system name', 'system', 'name'],
+      'description': ['description', 'desc', 'notes', 'details', 'info'],
+      'category': ['calibration type', 'cal type', 'category', 'type', 'parent component', 'component'],
+      'estimated_time': ['time', 'duration', 'estimated time', 'labor time', 'hours'],
+      'estimated_cost': ['cost', 'price', 'estimated cost', 'labor cost', 'fee'],
+      'pre_qualifications': [
+        'calibration prerequisites short hand',
+        'calibration prerequisites shorthand',  
+        'calibration prerequisites',
+        'prerequisites short hand',
+        'prerequisites shorthand',
+        'prerequisites',
+        'pre-qualifications',
+        'prequalifications', 
+        'pre-qualification',
+        'prequalification',
+        'pre-qual',
+        'prequal',
+        'pre qual',
+        'pre-reqs',
+        'prereqs',
+        'pre-req',
+        'prereq',
+        'pre req',
+        'requirements',
+      ],
+      'hyperlink': [
+        'service information hyperlink',
+        'oe glass service info hyperlink',
+        'service info hyperlink',
+        'hyperlink',
+        'link',
+        'url',
+        'web link',
+        'reference',
+      ],
+      'adas_keywords': ['keyword', 'keywords', 'search', 'tags'],
+      'required_for': ['required', 'trigger', 'required for', 'applies to', 'conditions'],
+      'equipment_needed': ['equipment', 'tool', 'tools', 'equipment needed', 'required equipment'],
+      // Year column - check for exact matches first, then partial
+      'vehicle_year': ['model year', 'vehicle year', 'year'],
+      // Model column - be more specific to avoid matching "model year"
+      'vehicle_model': ['vehicle model', 'model name'],
+      // Make column - for vehicle manufacturer
+      'vehicle_make': ['make', 'oem', 'manufacturer', 'vehicle make'],
     };
     
+    // First pass: exact matches (header equals keyword exactly)
     for (int i = 0; i < headers.length; i++) {
       final header = headers[i].toLowerCase().trim();
       if (header.isEmpty) continue;
       
-      // Check which database column this Excel column matches
       for (final dbEntry in dbColumns.entries) {
         final dbColumn = dbEntry.key;
         final keywords = dbEntry.value;
         
-        // Check if Excel header matches any of the keywords
         for (final keyword in keywords) {
-          if (header.contains(keyword)) {
+          if (header == keyword) {
             if (!map.containsKey(dbColumn)) {
               map[dbColumn] = i;
-              print('      "${headers[i]}" → $dbColumn');
+              print('      "${headers[i]}" → $dbColumn (exact match)');
             }
             break;
           }
@@ -323,8 +439,71 @@ class ExcelImportService {
       }
     }
     
+    // Second pass: partial/contains matches for columns not yet mapped
+    for (int i = 0; i < headers.length; i++) {
+      final header = headers[i].toLowerCase().trim();
+      if (header.isEmpty) continue;
+      
+      for (final dbEntry in dbColumns.entries) {
+        final dbColumn = dbEntry.key;
+        final keywords = dbEntry.value;
+        
+        // Skip if already mapped
+        if (map.containsKey(dbColumn)) continue;
+        
+        for (final keyword in keywords) {
+          if (header.contains(keyword)) {
+            // Special case: Don't match "model" for vehicle_model if the header contains "year"
+            if (dbColumn == 'vehicle_model' && keyword == 'model' && header.contains('year')) {
+              continue;
+            }
+            
+            map[dbColumn] = i;
+            print('      "${headers[i]}" → $dbColumn (partial match on "$keyword")');
+            break;
+          }
+        }
+      }
+    }
+    
+    // Third pass: Find "Model" column that is NOT "Model Year"
+    // This handles the common case where there's both "Model Year" and "Model" columns
+    if (!map.containsKey('vehicle_model')) {
+      for (int i = 0; i < headers.length; i++) {
+        final header = headers[i].toLowerCase().trim();
+        if (header.isEmpty) continue;
+        
+        // Match "model" but NOT if it contains "year"
+        if (header.contains('model') && !header.contains('year')) {
+          map['vehicle_model'] = i;
+          print('      "${headers[i]}" → vehicle_model (model without year)');
+          break;
+        }
+      }
+    }
+    
     if (map.isEmpty) {
       print('      ⚠️  No matching columns found');
+    } else {
+      print('   📋 Total columns mapped: ${map.length}');
+      
+      // Show which database columns were NOT mapped
+      final unmappedDbColumns = dbColumns.keys.where((col) => !map.containsKey(col)).toList();
+      if (unmappedDbColumns.isNotEmpty) {
+        print('   ⚠️  Database columns NOT found in Excel: $unmappedDbColumns');
+      }
+      
+      // Show which Excel columns were NOT mapped
+      final mappedIndices = map.values.toSet();
+      final unmappedExcelColumns = <String>[];
+      for (int i = 0; i < headers.length; i++) {
+        if (!mappedIndices.contains(i) && headers[i].isNotEmpty) {
+          unmappedExcelColumns.add('"${headers[i]}" (column $i)');
+        }
+      }
+      if (unmappedExcelColumns.isNotEmpty) {
+        print('   ⚠️  Excel columns NOT mapped to database: ${unmappedExcelColumns.join(', ')}');
+      }
     }
     
     return map;
