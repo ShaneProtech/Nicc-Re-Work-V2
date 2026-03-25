@@ -12,6 +12,7 @@ import 'history_screen.dart';
 import 'pdf_upload_screen.dart';
 import 'database_update_screen.dart';
 import 'database_manager_screen.dart';
+import 'json_import_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -253,6 +254,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         'color': const Color(0xFF9C27B0),
         'route': const DatabaseManagerScreen(),
         'refreshOnReturn': true,
+      },
+      {
+        'icon': Icons.data_object,
+        'title': 'ID3 JSON',
+        'description': 'Import calibration data from JSON/Text files',
+        'color': const Color(0xFFFF9800),
+        'route': const JsonImportScreen(),
       },
     ];
 
