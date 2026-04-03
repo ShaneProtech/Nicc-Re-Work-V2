@@ -3,6 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import '../theme/app_theme.dart';
+import '../widgets/screen_wrapper.dart';
 
 class JsonImportScreen extends StatefulWidget {
   const JsonImportScreen({Key? key}) : super(key: key);
@@ -146,49 +149,11 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
     return result;
   }
 
-  /// Comprehensive analysis to find ADAS systems that need calibration
+  /// Comprehensive analysis to find ADAS systems that need calibration based on actual repairs
   List<Map<String, String>> _analyzeForRequiredCalibrations(Map<String, dynamic> allValues, String rawContent) {
     final calibrations = <Map<String, String>>[];
     final addedSystems = <String>{};
     final contentLower = rawContent.toLowerCase();
-
-    // ADAS System definitions with full names and aliases
-    final adasSystems = {
-      'ACC': ['acc', 'adaptive cruise control', 'adaptive cruise', 'radar cruise', 'dynamic cruise'],
-      'AEB': ['aeb', 'automatic emergency braking', 'auto emergency brake', 'collision mitigation', 'cmbs', 'pre-collision', 'forward collision', 'fcw', 'forward collision warning'],
-      'LKA': ['lka', 'lane keep assist', 'lane keeping', 'lkas', 'lane assist', 'lane centering'],
-      'LDW': ['ldw', 'lane departure warning', 'lane departure'],
-      'BSW': ['bsw', 'blind spot warning', 'blind spot monitor', 'bsm', 'blis', 'blind spot detection', 'blind spot'],
-      'RCTA': ['rcta', 'rear cross traffic', 'rear cross-traffic', 'cross traffic alert'],
-      'APA': ['apa', 'parking assist', 'park assist', 'parking sensor', 'ultrasonic', 'pdc', 'park distance'],
-      'BUC': ['buc', 'backup camera', 'rear camera', 'rearview camera', 'reverse camera', 'back up camera'],
-      'SVC': ['svc', 'surround view', '360 camera', 'around view', 'bird eye', 'multi-view camera', 'avm'],
-      'AHL': ['ahl', 'adaptive headlight', 'adaptive headlamp', 'auto headlight', 'adaptive front light', 'afs'],
-      'SAS': ['sas', 'steering angle sensor', 'steering sensor', 'steering angle'],
-      'NV': ['nv', 'night vision', 'infrared camera', 'thermal camera'],
-      'TSR': ['tsr', 'traffic sign recognition', 'traffic sign', 'sign recognition'],
-      'DMS': ['dms', 'driver monitoring', 'driver attention', 'driver alert'],
-      'HUD': ['hud', 'head-up display', 'heads up display', 'head up'],
-    };
-
-    // Repair triggers that indicate calibration is needed
-    final repairTriggers = {
-      'ACC': ['front bumper', 'front radar', 'grille', 'front collision', 'front end', 'radiator support', 'front impact'],
-      'AEB': ['front bumper', 'front radar', 'front camera', 'windshield', 'front collision', 'grille', 'front end'],
-      'LKA': ['windshield', 'front camera', 'windshield camera', 'forward camera', 'alignment', 'suspension'],
-      'LDW': ['windshield', 'front camera', 'windshield camera', 'forward camera'],
-      'BSW': ['rear bumper', 'quarter panel', 'rear quarter', 'rear corner', 'rear collision', 'side mirror', 'rear impact'],
-      'RCTA': ['rear bumper', 'rear corner', 'rear collision', 'rear impact'],
-      'APA': ['front bumper', 'rear bumper', 'bumper', 'parking sensor', 'sensor'],
-      'BUC': ['tailgate', 'trunk', 'rear bumper', 'liftgate', 'rear camera', 'backup camera'],
-      'SVC': ['front bumper', 'rear bumper', 'side mirror', 'camera', 'mirror', 'door'],
-      'AHL': ['headlight', 'headlamp', 'front end', 'front collision', 'suspension'],
-      'SAS': ['alignment', 'steering', 'suspension', 'wheel', 'tie rod', 'rack'],
-      'NV': ['grille', 'front bumper', 'radiator', 'front end'],
-      'TSR': ['windshield', 'front camera'],
-      'DMS': ['interior', 'mirror', 'dash', 'dashboard'],
-      'HUD': ['windshield', 'dashboard', 'dash'],
-    };
 
     // Full system names for display
     final systemFullNames = {
@@ -209,166 +174,196 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
       'HUD': 'Head-Up Display',
     };
 
-    // Step 1: Find all ADAS systems mentioned in the file
-    final systemsFound = <String>{};
-    final systemContexts = <String, List<String>>{};
-
-    for (final entry in adasSystems.entries) {
-      final systemCode = entry.key;
-      final aliases = entry.value;
+    // Define repair operations and which calibrations they trigger
+    // Only these specific repairs will trigger calibrations
+    final repairToCalibration = {
+      // Front bumper work
+      'front bumper': ['ACC', 'AEB', 'APA'],
+      'front bumper cover': ['ACC', 'AEB', 'APA'],
+      'front bumper r&r': ['ACC', 'AEB', 'APA'],
+      'front bumper r&i': ['ACC', 'AEB', 'APA'],
+      'front bumper replace': ['ACC', 'AEB', 'APA'],
+      'front bumper repair': ['ACC', 'AEB', 'APA'],
       
-      for (final alias in aliases) {
-        if (contentLower.contains(alias)) {
-          systemsFound.add(systemCode);
-          // Find context around the mention
-          final contexts = _findContextsForTerm(rawContent, alias);
-          systemContexts[systemCode] = [...(systemContexts[systemCode] ?? []), ...contexts];
-          break;
-        }
-      }
-    }
+      // Rear bumper work
+      'rear bumper': ['BSW', 'RCTA', 'APA', 'BUC'],
+      'rear bumper cover': ['BSW', 'RCTA', 'APA', 'BUC'],
+      'rear bumper r&r': ['BSW', 'RCTA', 'APA', 'BUC'],
+      'rear bumper r&i': ['BSW', 'RCTA', 'APA', 'BUC'],
+      'rear bumper replace': ['BSW', 'RCTA', 'APA', 'BUC'],
+      'rear bumper repair': ['BSW', 'RCTA', 'APA', 'BUC'],
+      
+      // Windshield work
+      'windshield': ['LKA', 'LDW', 'AEB', 'TSR', 'HUD'],
+      'windshield replace': ['LKA', 'LDW', 'AEB', 'TSR', 'HUD'],
+      'windshield r&r': ['LKA', 'LDW', 'AEB', 'TSR', 'HUD'],
+      'windshield r&i': ['LKA', 'LDW', 'AEB', 'TSR', 'HUD'],
+      'front glass': ['LKA', 'LDW', 'AEB', 'TSR', 'HUD'],
+      
+      // Grille work
+      'grille': ['ACC', 'AEB', 'NV'],
+      'grille r&r': ['ACC', 'AEB', 'NV'],
+      'grille r&i': ['ACC', 'AEB', 'NV'],
+      'grille replace': ['ACC', 'AEB', 'NV'],
+      'front grille': ['ACC', 'AEB', 'NV'],
+      
+      // Quarter panel work
+      'quarter panel': ['BSW', 'RCTA'],
+      'rear quarter': ['BSW', 'RCTA'],
+      'quarter panel r&r': ['BSW', 'RCTA'],
+      'quarter panel repair': ['BSW', 'RCTA'],
+      
+      // Headlight work
+      'headlight': ['AHL'],
+      'headlamp': ['AHL'],
+      'headlight r&r': ['AHL'],
+      'headlight r&i': ['AHL'],
+      'headlight replace': ['AHL'],
+      'headlamp replace': ['AHL'],
+      
+      // Mirror work
+      'mirror': ['BSW', 'SVC'],
+      'side mirror': ['BSW', 'SVC'],
+      'mirror r&r': ['BSW', 'SVC'],
+      'mirror r&i': ['BSW', 'SVC'],
+      'mirror replace': ['BSW', 'SVC'],
+      
+      // Tailgate/Trunk work
+      'tailgate': ['BUC', 'SVC'],
+      'trunk': ['BUC'],
+      'liftgate': ['BUC', 'SVC'],
+      'tailgate r&r': ['BUC', 'SVC'],
+      'trunk lid': ['BUC'],
+      
+      // Steering/Suspension work
+      'alignment': ['SAS'],
+      'wheel alignment': ['SAS'],
+      'steering': ['SAS'],
+      'suspension': ['SAS', 'AHL'],
+      'tie rod': ['SAS'],
+      'control arm': ['SAS'],
+      'strut': ['SAS', 'AHL'],
+      
+      // Radar/Sensor work
+      'radar': ['ACC', 'AEB', 'BSW'],
+      'front radar': ['ACC', 'AEB'],
+      'rear radar': ['BSW', 'RCTA'],
+      'radar sensor': ['ACC', 'AEB', 'BSW'],
+      
+      // Camera work
+      'camera': ['LKA', 'BUC', 'SVC'],
+      'front camera': ['LKA', 'LDW', 'AEB', 'TSR'],
+      'rear camera': ['BUC'],
+      'backup camera': ['BUC'],
+      'surround camera': ['SVC'],
+      '360 camera': ['SVC'],
+      
+      // Collision areas
+      'front collision': ['ACC', 'AEB', 'LKA', 'AHL', 'NV'],
+      'front end damage': ['ACC', 'AEB', 'LKA', 'AHL', 'NV'],
+      'front impact': ['ACC', 'AEB', 'LKA', 'AHL', 'NV'],
+      'rear collision': ['BSW', 'RCTA', 'BUC', 'APA'],
+      'rear end damage': ['BSW', 'RCTA', 'BUC', 'APA'],
+      'rear impact': ['BSW', 'RCTA', 'BUC', 'APA'],
+      'side collision': ['BSW', 'SVC'],
+      'side impact': ['BSW', 'SVC'],
+      
+      // Radiator support
+      'radiator support': ['ACC', 'AEB', 'NV'],
+      'radiator': ['ACC', 'NV'],
+      
+      // Sensor work
+      'parking sensor': ['APA'],
+      'ultrasonic sensor': ['APA'],
+      'blind spot sensor': ['BSW'],
+    };
 
-    // Step 2: Find all repair/incident information
-    final repairsFound = <String>[];
-    final repairKeywords = [
-      'repair', 'replace', 'r&r', 'r&i', 'remove', 'install', 'collision',
-      'damage', 'impact', 'hit', 'accident', 'incident', 'work', 'service'
-    ];
+    // Step 1: Find all repairs mentioned in the file
+    final repairsFound = <String, String>{};  // repair -> context
     
-    for (final keyword in repairKeywords) {
-      if (contentLower.contains(keyword)) {
-        // Extract surrounding context
-        final contexts = _findContextsForTerm(rawContent, keyword);
-        repairsFound.addAll(contexts);
+    for (final repair in repairToCalibration.keys) {
+      if (contentLower.contains(repair)) {
+        // Find context to use as reason
+        final context = _extractRepairContext(rawContent, repair);
+        repairsFound[repair] = context;
       }
     }
 
-    // Step 3: For each system found, check if repairs trigger calibration need
-    for (final system in systemsFound) {
-      final triggers = repairTriggers[system] ?? [];
-      String? reason;
+    // Step 2: For each repair found, add the corresponding calibrations
+    for (final entry in repairsFound.entries) {
+      final repair = entry.key;
+      final context = entry.value;
+      final systems = repairToCalibration[repair] ?? [];
       
-      // Check if any trigger is mentioned
-      for (final trigger in triggers) {
-        if (contentLower.contains(trigger.toLowerCase())) {
-          reason = _findBestReason(rawContent, trigger);
-          break;
-        }
-      }
-      
-      // Also check if system is explicitly marked as needing calibration
-      if (reason == null) {
-        final systemAliases = adasSystems[system] ?? [];
-        for (final alias in systemAliases) {
-          if (contentLower.contains('$alias calibration') ||
-              contentLower.contains('calibrate $alias') ||
-              contentLower.contains('$alias cal') ||
-              contentLower.contains('$alias required') ||
-              contentLower.contains('$alias needed')) {
-            reason = 'System calibration required';
-            break;
-          }
-        }
-      }
-
-      if (reason != null && !addedSystems.contains(system)) {
-        addedSystems.add(system);
-        calibrations.add({
-          'name': '${systemFullNames[system]} ($system)',
-          'reason': reason,
-        });
-      }
-    }
-
-    // Step 4: Check for explicit calibration entries in the data
-    for (final entry in allValues.entries) {
-      final key = entry.key.toLowerCase();
-      final value = entry.value?.toString() ?? '';
-      
-      // Look for calibration-related keys
-      if (key.contains('calibration') || key.contains('adas') || key.contains('system')) {
-        // Check if value contains a system code
-        for (final systemEntry in adasSystems.entries) {
-          final systemCode = systemEntry.key;
-          final aliases = systemEntry.value;
-          
-          if (addedSystems.contains(systemCode)) continue;
-          
-          for (final alias in aliases) {
-            if (value.toLowerCase().contains(alias)) {
-              addedSystems.add(systemCode);
-              
-              // Try to find reason
-              String reason = '';
-              final reasonKeys = ['reason', 'because', 'trigger', 'cause', 'why', 'due'];
-              for (final rk in reasonKeys) {
-                final rv = _findValue(allValues, [rk, '${key}_$rk', '${rk}_${entry.key}']);
-                if (rv.isNotEmpty) {
-                  reason = rv;
-                  break;
-                }
-              }
-              
-              calibrations.add({
-                'name': '${systemFullNames[systemCode]} ($systemCode)',
-                'reason': reason.isEmpty ? 'Calibration required' : reason,
-              });
-              break;
-            }
-          }
+      for (final system in systems) {
+        if (!addedSystems.contains(system)) {
+          addedSystems.add(system);
+          calibrations.add({
+            'name': '${systemFullNames[system]} ($system)',
+            'reason': context,
+          });
         }
       }
     }
 
-    // Step 5: Check for numbered calibration fields
+    // Step 3: Check for explicit calibration entries in structured data
+    // This handles cases where the JSON explicitly lists calibrations needed
     for (int i = 1; i <= 20; i++) {
-      final calKeys = ['calibration$i', 'calibration_$i', 'cal$i', 'cal_$i', 'system$i', 'system_$i'];
+      final calKeys = ['calibration$i', 'calibration_$i', 'cal$i', 'cal_$i', 'system$i', 'system_$i', 'adas$i'];
       
       for (final calKey in calKeys) {
         final calValue = _findValueExact(allValues, calKey);
         if (calValue != null && calValue.isNotEmpty) {
-          // Check if it's a known system
-          String? matchedSystem;
-          for (final systemEntry in adasSystems.entries) {
-            for (final alias in systemEntry.value) {
+          // Try to match to known system
+          String systemName = calValue;
+          String? matchedCode;
+          
+          final systemAliases = {
+            'ACC': ['acc', 'adaptive cruise'],
+            'AEB': ['aeb', 'auto emergency', 'emergency braking', 'collision mitigation'],
+            'LKA': ['lka', 'lane keep', 'lane assist'],
+            'LDW': ['ldw', 'lane departure'],
+            'BSW': ['bsw', 'blind spot'],
+            'RCTA': ['rcta', 'rear cross traffic'],
+            'APA': ['apa', 'parking assist', 'park assist'],
+            'BUC': ['buc', 'backup camera', 'rear camera'],
+            'SVC': ['svc', 'surround view', '360'],
+            'AHL': ['ahl', 'adaptive headlight'],
+            'SAS': ['sas', 'steering angle'],
+            'NV': ['nv', 'night vision'],
+            'TSR': ['tsr', 'traffic sign'],
+            'DMS': ['dms', 'driver monitor'],
+            'HUD': ['hud', 'head up', 'heads up'],
+          };
+          
+          for (final sysEntry in systemAliases.entries) {
+            for (final alias in sysEntry.value) {
               if (calValue.toLowerCase().contains(alias)) {
-                matchedSystem = systemEntry.key;
+                matchedCode = sysEntry.key;
+                systemName = '${systemFullNames[matchedCode]} ($matchedCode)';
                 break;
               }
             }
-            if (matchedSystem != null) break;
+            if (matchedCode != null) break;
           }
           
-          if (matchedSystem != null && !addedSystems.contains(matchedSystem)) {
-            addedSystems.add(matchedSystem);
-            
-            // Find reason
-            String reason = '';
-            for (final reasonKey in ['reason$i', 'reason_$i', 'because$i', 'because_$i', 'trigger$i']) {
-              final rv = _findValueExact(allValues, reasonKey);
-              if (rv != null && rv.isNotEmpty) {
-                reason = rv;
-                break;
-              }
+          // Find reason
+          String reason = '';
+          for (final reasonKey in ['reason$i', 'reason_$i', 'because$i', 'because_$i', 'trigger$i', 'cause$i']) {
+            final rv = _findValueExact(allValues, reasonKey);
+            if (rv != null && rv.isNotEmpty) {
+              reason = rv;
+              break;
             }
-            
+          }
+          
+          // Only add if not already added or if it has a specific reason
+          final keyToCheck = matchedCode ?? calValue;
+          if (!addedSystems.contains(keyToCheck)) {
+            addedSystems.add(keyToCheck);
             calibrations.add({
-              'name': '${systemFullNames[matchedSystem]} ($matchedSystem)',
-              'reason': reason.isEmpty ? 'Calibration required' : reason,
-            });
-          } else if (matchedSystem == null) {
-            // Unknown system, add as-is
-            String reason = '';
-            for (final reasonKey in ['reason$i', 'reason_$i', 'because$i', 'because_$i']) {
-              final rv = _findValueExact(allValues, reasonKey);
-              if (rv != null && rv.isNotEmpty) {
-                reason = rv;
-                break;
-              }
-            }
-            calibrations.add({
-              'name': calValue,
-              'reason': reason,
+              'name': systemName,
+              'reason': reason.isNotEmpty ? reason : 'Per repair requirements',
             });
           }
           break;
@@ -376,39 +371,34 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
       }
     }
 
-    // Step 6: If no calibrations found yet, do a final deep scan
-    if (calibrations.isEmpty) {
-      // Look for any "required" or "needed" mentions with systems
-      for (final systemEntry in adasSystems.entries) {
-        final systemCode = systemEntry.key;
-        final aliases = systemEntry.value;
+    // Step 4: Check for calibration fields with explicit system and reason
+    for (final entry in allValues.entries) {
+      final key = entry.key.toLowerCase();
+      final value = entry.value?.toString() ?? '';
+      
+      // Look for keys that explicitly state calibration is needed
+      if ((key.contains('calibration') && key.contains('required')) ||
+          (key.contains('calibration') && key.contains('needed')) ||
+          key.contains('needs_calibration') ||
+          key.contains('requires_calibration')) {
         
-        if (addedSystems.contains(systemCode)) continue;
-        
-        for (final alias in aliases) {
-          // Check various patterns
-          final patterns = [
-            '$alias required',
-            '$alias needed',
-            '$alias calibration',
-            'calibrate $alias',
-            '$alias - required',
-            '$alias: required',
-            'requires $alias',
-            '$alias service',
-          ];
+        if (value.toLowerCase() == 'true' || value.toLowerCase() == 'yes' || value == '1') {
+          // Find which system this relates to
+          final systemKey = key.replaceAll('calibration', '').replaceAll('required', '')
+              .replaceAll('needed', '').replaceAll('_', '').trim();
           
-          for (final pattern in patterns) {
-            if (contentLower.contains(pattern)) {
-              addedSystems.add(systemCode);
-              calibrations.add({
-                'name': '${systemFullNames[systemCode]} ($systemCode)',
-                'reason': 'Calibration required per analysis',
-              });
+          for (final sysEntry in systemFullNames.entries) {
+            if (systemKey.toLowerCase().contains(sysEntry.key.toLowerCase())) {
+              if (!addedSystems.contains(sysEntry.key)) {
+                addedSystems.add(sysEntry.key);
+                calibrations.add({
+                  'name': '${sysEntry.value} (${sysEntry.key})',
+                  'reason': 'Calibration flagged as required',
+                });
+              }
               break;
             }
           }
-          if (addedSystems.contains(systemCode)) break;
         }
       }
     }
@@ -416,47 +406,52 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
     return calibrations;
   }
 
-  List<String> _findContextsForTerm(String content, String term) {
-    final contexts = <String>[];
-    final lowerContent = content.toLowerCase();
-    final lowerTerm = term.toLowerCase();
+  /// Extract the repair context to use as the reason
+  String _extractRepairContext(String content, String repair) {
+    final contentLower = content.toLowerCase();
+    final repairLower = repair.toLowerCase();
     
-    int index = 0;
-    while ((index = lowerContent.indexOf(lowerTerm, index)) != -1) {
-      final start = (index - 50).clamp(0, content.length);
-      final end = (index + term.length + 50).clamp(0, content.length);
-      contexts.add(content.substring(start, end).replaceAll('\n', ' ').trim());
-      index += term.length;
-    }
+    final index = contentLower.indexOf(repairLower);
+    if (index == -1) return _capitalizeFirst(repair);
     
-    return contexts;
-  }
-
-  String _findBestReason(String content, String trigger) {
-    final lowerContent = content.toLowerCase();
-    final triggerLower = trigger.toLowerCase();
+    // Look for action words near the repair mention
+    final start = (index - 50).clamp(0, content.length);
+    final end = (index + repair.length + 50).clamp(0, content.length);
+    final context = content.substring(start, end).toLowerCase();
     
-    // Find the context around the trigger
-    final index = lowerContent.indexOf(triggerLower);
-    if (index == -1) return trigger;
+    // Find the action being performed
+    String action = '';
+    final actions = [
+      ('replace', 'replacement'),
+      ('r&r', 'R&R'),
+      ('r&i', 'R&I'),
+      ('repair', 'repair'),
+      ('remove', 'removal'),
+      ('install', 'installation'),
+      ('damage', 'damage'),
+      ('collision', 'collision'),
+      ('impact', 'impact'),
+    ];
     
-    // Extract surrounding text
-    final start = (index - 30).clamp(0, content.length);
-    final end = (index + trigger.length + 30).clamp(0, content.length);
-    final context = content.substring(start, end).replaceAll('\n', ' ').trim();
-    
-    // Look for repair actions
-    final actions = ['replace', 'repair', 'r&r', 'r&i', 'remove', 'install', 'damage', 'collision'];
-    for (final action in actions) {
-      if (context.toLowerCase().contains(action)) {
-        // Capitalize first letter
-        final capitalizedTrigger = trigger[0].toUpperCase() + trigger.substring(1);
-        return '$capitalizedTrigger $action';
+    for (final (keyword, display) in actions) {
+      if (context.contains(keyword)) {
+        action = display;
+        break;
       }
     }
     
-    return trigger[0].toUpperCase() + trigger.substring(1);
+    final repairCapitalized = _capitalizeFirst(repair);
+    if (action.isNotEmpty) {
+      return '$repairCapitalized $action';
+    }
+    return repairCapitalized;
   }
+
+  String _capitalizeFirst(String text) {
+    if (text.isEmpty) return text;
+    return text[0].toUpperCase() + text.substring(1);
+  }
+
 
   void _flattenJson(dynamic data, Map<String, dynamic> result, String prefix) {
     if (data is Map) {
@@ -629,59 +624,32 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
     final analyzedCount = _vehicles.where((v) => !v.isAnalyzing && v.error == null).length;
     final analyzingCount = _vehicles.where((v) => v.isAnalyzing).length;
     
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('ID3 JSON'),
-        actions: [
-          if (_vehicles.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.clear_all),
-              onPressed: _clearData,
-              tooltip: 'Clear All',
-            ),
-          IconButton(
-            icon: const Icon(Icons.folder_open),
-            onPressed: _pickJsonFiles,
-            tooltip: 'Select Files',
+    return ScreenWrapper(
+      title: 'ID3 JSON',
+      subtitle: 'Import and analyze vehicle calibration data',
+      accentColor: AppColors.cardJSON,
+      actions: [
+        if (_vehicles.isNotEmpty)
+          NeumorphicIconButton(
+            icon: Icons.clear_all_rounded,
+            onPressed: _clearData,
+            tooltip: 'Clear All',
+            color: AppColors.error,
           ),
-        ],
-      ),
-      body: Column(
+        NeumorphicIconButton(
+          icon: Icons.folder_open_rounded,
+          onPressed: _pickJsonFiles,
+          tooltip: 'Select Files',
+          color: AppColors.cardJSON,
+        ),
+      ],
+      child: Column(
         children: [
-          // Drop Zone
           _buildDropZone(),
           
-          // Status
           if (_vehicles.isNotEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              color: analyzingCount > 0 ? Colors.orange.shade900 : Colors.blue.shade900,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (analyzingCount > 0) ...[
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                  ],
-                  Text(
-                    analyzingCount > 0
-                        ? 'Analyzing $analyzingCount file(s)... $analyzedCount completed'
-                        : '$analyzedCount vehicle(s) analyzed',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ],
-              ),
-            ),
+            _buildStatusBar(analyzingCount, analyzedCount),
           
-          // Results
           Expanded(
             child: _vehicles.isEmpty
                 ? _buildEmptyState()
@@ -690,6 +658,50 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
         ],
       ),
     );
+  }
+
+  Widget _buildStatusBar(int analyzingCount, int analyzedCount) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 28),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      decoration: NeumorphicDecoration.glowingBorder(
+        glowColor: analyzingCount > 0 ? AppColors.warning : AppColors.primaryBlue,
+        radius: 14,
+        glowIntensity: 0.3,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (analyzingCount > 0) ...[
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(AppColors.warning),
+              ),
+            ),
+            const SizedBox(width: 12),
+          ] else ...[
+            Icon(
+              Icons.check_circle_rounded,
+              color: AppColors.success,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+          ],
+          Text(
+            analyzingCount > 0
+                ? 'Analyzing $analyzingCount file(s)... $analyzedCount completed'
+                : '$analyzedCount vehicle(s) analyzed',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: analyzingCount > 0 ? AppColors.warning : AppColors.primaryBlue,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    ).animate().fadeIn(duration: 300.ms);
   }
 
   Widget _buildDropZone() {
@@ -712,82 +724,84 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
       onDragExited: (details) {
         setState(() => _isDragging = false);
       },
-      child: Container(
-        height: 120,
-        margin: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: _isDragging ? Colors.blue.withOpacity(0.2) : Colors.grey.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: _isDragging ? Colors.blue : Colors.grey,
-            width: 2,
-            style: BorderStyle.solid,
-          ),
-        ),
-        child: InkWell(
-          onTap: _pickJsonFiles,
-          borderRadius: BorderRadius.circular(12),
+      child: GestureDetector(
+        onTap: _pickJsonFiles,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          height: 140,
+          margin: const EdgeInsets.fromLTRB(28, 16, 28, 16),
+          decoration: _isDragging
+              ? NeumorphicDecoration.glowingBorder(
+                  glowColor: AppColors.cardJSON,
+                  radius: 20,
+                  glowIntensity: 0.7,
+                )
+              : NeumorphicDecoration.concave(radius: 20),
           child: Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(
-                  _isDragging ? Icons.file_download : Icons.upload_file,
-                  size: 40,
-                  color: _isDragging ? Colors.blue : Colors.grey,
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: _isDragging
+                        ? AppColors.cardJSON.withOpacity(0.2)
+                        : AppColors.backgroundLight.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Icon(
+                    _isDragging ? Icons.file_download_rounded : Icons.cloud_upload_rounded,
+                    size: 36,
+                    color: _isDragging ? AppColors.cardJSON : AppColors.textMuted,
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
                 Text(
                   _isDragging 
                       ? 'Drop files here' 
-                      : 'Drag & Drop JSON or Text files here\nor click to browse\n(Each file = 1 vehicle)',
-                  style: TextStyle(
-                    color: _isDragging ? Colors.blue : Colors.grey,
-                    fontSize: 14,
+                      : 'Drag & Drop JSON or Text files',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: _isDragging ? AppColors.cardJSON : AppColors.textSecondary,
+                    fontWeight: FontWeight.w600,
                   ),
-                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _isDragging 
+                      ? 'Release to import' 
+                      : 'or click to browse  •  Each file = 1 vehicle',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.textMuted,
+                  ),
                 ),
               ],
             ),
           ),
         ),
       ),
-    );
+    ).animate().fadeIn(duration: 400.ms).slideY(begin: -0.1);
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.insert_drive_file, size: 64, color: Colors.grey[400]),
-          const SizedBox(height: 16),
-          Text(
-            'No files imported',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  color: Colors.grey[600],
-                ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Drag and drop JSON or Text files above\nEach file represents one vehicle',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Colors.grey[500],
-                ),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
+    return EmptyState(
+      icon: Icons.description_outlined,
+      title: 'No files imported',
+      subtitle: 'Drag and drop JSON or Text files above\nEach file represents one vehicle',
+      iconColor: AppColors.cardJSON.withOpacity(0.5),
     );
   }
 
   Widget _buildResultsList() {
     return ListView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(28, 8, 28, 28),
       itemCount: _vehicles.length,
       itemBuilder: (context, index) {
         final vehicle = _vehicles[index];
-        return _buildVehicleCard(vehicle, index + 1);
+        return _buildVehicleCard(vehicle, index + 1)
+            .animate(delay: (index * 100).ms)
+            .fadeIn(duration: 400.ms)
+            .slideY(begin: 0.1);
       },
     );
   }
@@ -810,77 +824,89 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
 
     final vehicleInfo = [year, make, model].where((s) => s.isNotEmpty).join(' ');
 
-    return Card(
+    return Container(
       margin: const EdgeInsets.only(bottom: 16),
+      decoration: NeumorphicDecoration.flat(radius: 20),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               children: [
-                CircleAvatar(
-                  backgroundColor: Colors.green,
-                  child: const Icon(Icons.check, color: Colors.white),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.success.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(
+                    Icons.check_rounded,
+                    color: AppColors.success,
+                    size: 24,
+                  ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         vehicleInfo.isNotEmpty ? vehicleInfo : 'Unknown Vehicle',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
                         ),
                       ),
+                      const SizedBox(height: 2),
                       Text(
                         vehicle.fileName,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[500],
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.textMuted,
                         ),
                       ),
                     ],
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
-                    color: calibrations.isNotEmpty ? Colors.blue.withOpacity(0.2) : Colors.grey.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(16),
+                    color: calibrations.isNotEmpty 
+                        ? AppColors.primaryBlue.withOpacity(0.15) 
+                        : AppColors.textMuted.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: calibrations.isNotEmpty 
+                          ? AppColors.primaryBlue.withOpacity(0.3) 
+                          : Colors.transparent,
+                    ),
                   ),
                   child: Text(
-                    '${calibrations.length} calibration(s)',
-                    style: TextStyle(
-                      color: calibrations.isNotEmpty ? Colors.blue : Colors.grey,
+                    '${calibrations.length} calibration${calibrations.length != 1 ? 's' : ''}',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: calibrations.isNotEmpty ? AppColors.primaryBlue : AppColors.textMuted,
                       fontWeight: FontWeight.w600,
-                      fontSize: 12,
                     ),
                   ),
                 ),
               ],
             ),
             
-            const Divider(height: 24),
+            const SizedBox(height: 16),
+            Container(height: 1, color: AppColors.shadowLight.withOpacity(0.3)),
+            const SizedBox(height: 16),
             
-            // Vehicle Info Section
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey[850],
-                borderRadius: BorderRadius.circular(8),
-              ),
+              padding: const EdgeInsets.all(16),
+              decoration: NeumorphicDecoration.concave(radius: 14),
               child: SelectableText(
                 _buildOutputText(year, make, model, vin, calibrations),
-                style: const TextStyle(
-                  fontFamily: 'monospace',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontFamily: 'JetBrains Mono',
                   fontSize: 13,
-                  color: Colors.white,
-                  height: 1.6,
+                  color: AppColors.textSecondary,
+                  height: 1.7,
                 ),
               ),
             ),
@@ -926,69 +952,78 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
   }
 
   Widget _buildAnalyzingCard(_VehicleAnalysis vehicle, int number) {
-    return Card(
+    return Container(
       margin: const EdgeInsets.only(bottom: 16),
+      decoration: NeumorphicDecoration.glowingBorder(
+        glowColor: AppColors.primaryBlue,
+        radius: 20,
+        glowIntensity: 0.3,
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Row(
           children: [
-            // Animated analyzing indicator
-            SizedBox(
-              width: 48,
-              height: 48,
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: AppColors.primaryBlue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(16),
+              ),
               child: Stack(
                 alignment: Alignment.center,
                 children: [
                   SizedBox(
-                    width: 48,
-                    height: 48,
+                    width: 40,
+                    height: 40,
                     child: CircularProgressIndicator(
                       strokeWidth: 3,
-                      color: Colors.blue.shade400,
+                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryBlue),
                     ),
                   ),
                   Icon(
-                    Icons.search,
-                    color: Colors.blue.shade400,
-                    size: 20,
-                  ),
+                    Icons.search_rounded,
+                    color: AppColors.primaryBlue,
+                    size: 18,
+                  ).animate(onPlay: (c) => c.repeat())
+                      .scale(begin: const Offset(0.9, 0.9), end: const Offset(1.1, 1.1), duration: 800.ms)
+                      .then()
+                      .scale(begin: const Offset(1.1, 1.1), end: const Offset(0.9, 0.9), duration: 800.ms),
                 ],
               ),
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: 20),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     vehicle.fileName,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 6),
                   Row(
                     children: [
                       _buildPulsingDot(),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 10),
                       Text(
                         'Analyzing file contents...',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.blue.shade300,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppColors.primaryBlue,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  // Progress bar animation
+                  const SizedBox(height: 12),
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: BorderRadius.circular(6),
                     child: LinearProgressIndicator(
-                      backgroundColor: Colors.grey[800],
-                      color: Colors.blue.shade400,
-                      minHeight: 4,
+                      backgroundColor: AppColors.backgroundLight,
+                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryBlue),
+                      minHeight: 6,
                     ),
                   ),
                 ],
@@ -1001,37 +1036,49 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
   }
 
   Widget _buildPulsingDot() {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0.5, end: 1.0),
-      duration: const Duration(milliseconds: 600),
-      builder: (context, value, child) {
-        return Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(value),
-            shape: BoxShape.circle,
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(
+        color: AppColors.primaryBlue,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryBlue.withOpacity(0.5),
+            blurRadius: 8,
+            spreadRadius: 2,
           ),
-        );
-      },
-      onEnd: () {
-        // This will cause the animation to repeat
-        setState(() {});
-      },
-    );
+        ],
+      ),
+    ).animate(onPlay: (c) => c.repeat())
+        .scale(begin: const Offset(0.8, 0.8), end: const Offset(1.2, 1.2), duration: 600.ms)
+        .then()
+        .scale(begin: const Offset(1.2, 1.2), end: const Offset(0.8, 0.8), duration: 600.ms);
   }
 
   Widget _buildErrorCard(_VehicleAnalysis vehicle, int number) {
-    return Card(
+    return Container(
       margin: const EdgeInsets.only(bottom: 16),
-      color: Colors.red.shade900.withOpacity(0.3),
+      decoration: NeumorphicDecoration.glowingBorder(
+        glowColor: AppColors.error,
+        radius: 20,
+        glowIntensity: 0.4,
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Row(
           children: [
-            CircleAvatar(
-              backgroundColor: Colors.red,
-              child: const Icon(Icons.error, color: Colors.white),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.error.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(
+                Icons.error_outline_rounded,
+                color: AppColors.error,
+                size: 24,
+              ),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -1040,17 +1087,16 @@ class _JsonImportScreenState extends State<JsonImportScreen> with TickerProvider
                 children: [
                   Text(
                     vehicle.fileName,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     'Error: ${vehicle.error}',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.red.shade300,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: AppColors.error,
                     ),
                   ),
                 ],
