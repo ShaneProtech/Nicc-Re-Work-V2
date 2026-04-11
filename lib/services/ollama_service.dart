@@ -181,8 +181,10 @@ System IDs to return:''';
 
   Future<String> answerQuestion(
     String question,
-    List<CalibrationSystem> allSystems,
-  ) async {
+    List<CalibrationSystem> allSystems, {
+    String? goldBlackContext,
+    List<Map<String, dynamic>>? relevantDTCs,
+  }) async {
     final systemsContext = allSystems.map((s) {
       return '''
 System: ${s.name}
@@ -195,21 +197,50 @@ Equipment: ${s.equipmentNeeded.join(", ")}
 ''';
     }).join('\n---\n');
 
-    final prompt = '''You are an expert ADAS calibration assistant with access to a comprehensive calibration database. Answer questions intelligently based on context.
+    // Build DTC context if available
+    String dtcContext = '';
+    if (goldBlackContext != null && goldBlackContext.isNotEmpty) {
+      dtcContext = '''
+
+GOLD/BLACK DTC DATABASE:
+$goldBlackContext
+''';
+    }
+    
+    // Add specific DTCs if provided
+    String relevantDTCsContext = '';
+    if (relevantDTCs != null && relevantDTCs.isNotEmpty) {
+      final dtcLines = relevantDTCs.map((dtc) {
+        final listType = dtc['list_type'] == 'gold' ? 'GOLD' : 'BLACK';
+        return '[$listType] ${dtc['dtc_code']}: ${dtc['description'] ?? 'No description'} (Module: ${dtc['module'] ?? 'Unknown'})';
+      }).join('\n');
+      relevantDTCsContext = '''
+
+RELEVANT DTCs FOR THIS QUERY:
+$dtcLines
+''';
+    }
+
+    final prompt = '''You are an expert ADAS calibration assistant with access to a comprehensive calibration database and DTC (Diagnostic Trouble Code) information. Answer questions intelligently based on context.
 
 CONTEXT-AWARE RESPONSE RULES:
 1. VEHICLE-SPECIFIC QUESTIONS: If user mentions a specific vehicle, year, make, model, or VIN, reference the database systems that apply to that vehicle type
 2. IMPACT AREA QUESTIONS: If user asks about specific damage areas (front, rear, side, etc.), identify relevant calibration systems from the database
 3. PRE-QUALIFICATION QUESTIONS: If user asks about pre-qualifications, requirements, or prerequisites, provide specific information from the database
-4. GENERAL QUESTIONS: For casual conversation, respond naturally without overwhelming with technical details
-5. TECHNICAL QUESTIONS: When asked about specific repairs, parts, or systems, provide detailed database information
+4. DTC QUESTIONS: If user asks about a DTC code, fault code, or trouble code, look it up in the Gold/Black DTC database and explain:
+   - What the code means
+   - Whether it's on the Gold list (requires attention) or Black list (can be ignored/cleared)
+   - Any relevant module or system information
+5. GENERAL QUESTIONS: For casual conversation, respond naturally without overwhelming with technical details
+6. TECHNICAL QUESTIONS: When asked about specific repairs, parts, or systems, provide detailed database information
 
 DATABASE CONTEXT (use when relevant):
 $systemsContext
-
+$dtcContext$relevantDTCsContext
 RESPONSE GUIDELINES:
 - Be conversational and helpful
 - Reference specific systems from the database when discussing vehicles, impact areas, or pre-qualifications
+- When discussing DTCs, clearly indicate if they are on the GOLD list (important/actionable) or BLACK list (can be cleared/ignored)
 - Provide practical, actionable information
 - If discussing a specific vehicle or repair scenario, mention the relevant calibration systems
 - Keep responses focused and relevant to the question

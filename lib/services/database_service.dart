@@ -30,7 +30,7 @@ class DatabaseService {
       return await databaseFactory.openDatabase(
         path,
         options: OpenDatabaseOptions(
-          version: 4, // Increased version to add vehicle_make column
+          version: 5, // Increased version to add goldblack_dtcs table
           onCreate: _createDatabase,
           onUpgrade: _upgradeDatabase,
         ),
@@ -43,7 +43,7 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 4, // Increased version to add vehicle_make column
+      version: 5, // Increased version to add goldblack_dtcs table
       onCreate: _createDatabase,
       onUpgrade: _upgradeDatabase,
     );
@@ -67,6 +67,29 @@ class DatabaseService {
     if (oldVersion < 4) {
       // Add vehicle_make column for version 4
       await db.execute('ALTER TABLE calibration_systems ADD COLUMN vehicle_make TEXT DEFAULT ""');
+    }
+    if (oldVersion < 5) {
+      // Add Gold/Black DTC tables for version 5
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS goldblack_dtcs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          dtc_code TEXT NOT NULL,
+          description TEXT,
+          module TEXT,
+          system TEXT,
+          category TEXT,
+          list_type TEXT NOT NULL,
+          make TEXT,
+          model TEXT,
+          year TEXT,
+          notes TEXT,
+          additional_data TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+      ''');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_goldblack_dtc_code ON goldblack_dtcs(dtc_code)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_goldblack_list_type ON goldblack_dtcs(list_type)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_goldblack_module ON goldblack_dtcs(module)');
     }
   }
 
@@ -325,6 +348,28 @@ class DatabaseService {
         FOREIGN KEY (system_id) REFERENCES calibration_systems (id)
       )
     ''');
+
+    // Create Gold/Black DTC table
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS goldblack_dtcs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        dtc_code TEXT NOT NULL,
+        description TEXT,
+        module TEXT,
+        system TEXT,
+        category TEXT,
+        list_type TEXT NOT NULL,
+        make TEXT,
+        model TEXT,
+        year TEXT,
+        notes TEXT,
+        additional_data TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_goldblack_dtc_code ON goldblack_dtcs(dtc_code)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_goldblack_list_type ON goldblack_dtcs(list_type)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_goldblack_module ON goldblack_dtcs(module)');
 
     // Insert sample calibration systems
     await _insertSampleData(db);
@@ -716,6 +761,160 @@ class DatabaseService {
     }
     
     return 'UNKNOWN';
+  }
+
+  // ==================== GOLD/BLACK DTC METHODS ====================
+
+  Future<void> insertGoldBlackDTC(Map<String, dynamic> dtc) async {
+    final db = await database;
+    await db.insert('goldblack_dtcs', dtc, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> insertGoldBlackDTCBatch(List<Map<String, dynamic>> dtcs) async {
+    final db = await database;
+    final batch = db.batch();
+    for (final dtc in dtcs) {
+      batch.insert('goldblack_dtcs', dtc, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<List<Map<String, dynamic>>> getAllGoldBlackDTCs() async {
+    final db = await database;
+    return await db.query('goldblack_dtcs', orderBy: 'dtc_code ASC');
+  }
+
+  Future<List<Map<String, dynamic>>> getGoldListDTCs() async {
+    final db = await database;
+    return await db.query(
+      'goldblack_dtcs',
+      where: 'list_type = ?',
+      whereArgs: ['gold'],
+      orderBy: 'dtc_code ASC',
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getBlackListDTCs() async {
+    final db = await database;
+    return await db.query(
+      'goldblack_dtcs',
+      where: 'list_type = ?',
+      whereArgs: ['black'],
+      orderBy: 'dtc_code ASC',
+    );
+  }
+
+  Future<int> getGoldListCount() async {
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM goldblack_dtcs WHERE list_type = ?',
+      ['gold'],
+    );
+    return result.first['count'] as int;
+  }
+
+  Future<int> getBlackListCount() async {
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM goldblack_dtcs WHERE list_type = ?',
+      ['black'],
+    );
+    return result.first['count'] as int;
+  }
+
+  Future<List<Map<String, dynamic>>> searchGoldBlackDTCs(String query) async {
+    final db = await database;
+    return await db.query(
+      'goldblack_dtcs',
+      where: 'dtc_code LIKE ? OR description LIKE ? OR module LIKE ? OR system LIKE ?',
+      whereArgs: ['%$query%', '%$query%', '%$query%', '%$query%'],
+      orderBy: 'dtc_code ASC',
+    );
+  }
+
+  Future<Map<String, dynamic>?> getDTCByCode(String dtcCode) async {
+    final db = await database;
+    final results = await db.query(
+      'goldblack_dtcs',
+      where: 'dtc_code = ?',
+      whereArgs: [dtcCode],
+    );
+    return results.isNotEmpty ? results.first : null;
+  }
+
+  Future<List<Map<String, dynamic>>> getDTCsByModule(String module) async {
+    final db = await database;
+    return await db.query(
+      'goldblack_dtcs',
+      where: 'module LIKE ?',
+      whereArgs: ['%$module%'],
+      orderBy: 'dtc_code ASC',
+    );
+  }
+
+  Future<void> clearGoldBlackDTCs({String? listType}) async {
+    final db = await database;
+    if (listType != null) {
+      await db.delete('goldblack_dtcs', where: 'list_type = ?', whereArgs: [listType]);
+    } else {
+      await db.delete('goldblack_dtcs');
+    }
+  }
+
+  Future<Map<String, dynamic>> getGoldBlackStats() async {
+    final goldCount = await getGoldListCount();
+    final blackCount = await getBlackListCount();
+    
+    final db = await database;
+    final modules = await db.rawQuery(
+      'SELECT DISTINCT module FROM goldblack_dtcs WHERE module IS NOT NULL AND module != ""'
+    );
+    
+    return {
+      'gold_count': goldCount,
+      'black_count': blackCount,
+      'total_count': goldCount + blackCount,
+      'unique_modules': modules.length,
+    };
+  }
+
+  Future<String> getGoldBlackSummaryForAI() async {
+    final stats = await getGoldBlackStats();
+    final goldDTCs = await getGoldListDTCs();
+    final blackDTCs = await getBlackListDTCs();
+    
+    final buffer = StringBuffer();
+    buffer.writeln('=== GOLD/BLACK DTC DATABASE SUMMARY ===');
+    buffer.writeln('Gold List DTCs: ${stats['gold_count']}');
+    buffer.writeln('Black List DTCs: ${stats['black_count']}');
+    buffer.writeln('Total DTCs: ${stats['total_count']}');
+    buffer.writeln('');
+    
+    if (goldDTCs.isNotEmpty) {
+      buffer.writeln('--- GOLD LIST (First 50) ---');
+      for (var i = 0; i < goldDTCs.length && i < 50; i++) {
+        final dtc = goldDTCs[i];
+        buffer.writeln('${dtc['dtc_code']}: ${dtc['description'] ?? ''} [${dtc['module'] ?? ''}]');
+      }
+      if (goldDTCs.length > 50) {
+        buffer.writeln('... and ${goldDTCs.length - 50} more');
+      }
+    }
+    
+    buffer.writeln('');
+    
+    if (blackDTCs.isNotEmpty) {
+      buffer.writeln('--- BLACK LIST (First 50) ---');
+      for (var i = 0; i < blackDTCs.length && i < 50; i++) {
+        final dtc = blackDTCs[i];
+        buffer.writeln('${dtc['dtc_code']}: ${dtc['description'] ?? ''} [${dtc['module'] ?? ''}]');
+      }
+      if (blackDTCs.length > 50) {
+        buffer.writeln('... and ${blackDTCs.length - 50} more');
+      }
+    }
+    
+    return buffer.toString();
   }
 }
 

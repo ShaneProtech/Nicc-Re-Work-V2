@@ -9,6 +9,7 @@ import '../screens/pdf_upload_screen.dart';
 import '../screens/database_update_screen.dart';
 import '../screens/database_manager_screen.dart';
 import '../screens/json_import_screen.dart';
+import '../screens/goldblack_screen.dart';
 
 class NavItem {
   final IconData icon;
@@ -102,6 +103,13 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
       label: 'ID3 JSON',
       screen: const JsonImportScreen(),
       accentColor: AppColors.cardJSON,
+    ),
+    NavItem(
+      icon: Icons.star_outline_rounded,
+      activeIcon: Icons.star_rounded,
+      label: 'Gold/Black Lists',
+      screen: const GoldBlackScreen(),
+      accentColor: Colors.amber,
     ),
   ];
 

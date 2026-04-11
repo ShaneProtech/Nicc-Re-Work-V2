@@ -27,6 +27,10 @@ dependencies:
   sqflite_common_ffi: ^2.3.0
   path_provider: ^2.1.1
   path: ^1.8.3
+
+  # File Processing
+  archive: ^3.4.10
+  xml: ^6.5.0
   
   # HTTP & API
   http: ^1.1.0

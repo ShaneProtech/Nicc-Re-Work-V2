@@ -262,8 +262,8 @@ class _AIAssistantScreenState extends State<AIAssistantScreen> {
       'What calibrations for 2023 Honda Accord front-end collision?',
       'What pre-qualifications are needed for ADAS camera calibration?',
       'What systems are required for rear bumper replacement?',
-      'How much does radar calibration cost?',
-      'What equipment is needed for lane departure warning?',
+      'How many DTCs are in the Gold and Black lists?',
+      'What is on the Gold list vs Black list?',
     ];
 
     return SizedBox(

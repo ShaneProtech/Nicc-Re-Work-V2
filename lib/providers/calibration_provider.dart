@@ -182,9 +182,48 @@ class CalibrationProvider extends ChangeNotifier {
         }
       }
 
+      // Check if question mentions DTCs or fault codes
+      String? goldBlackContext;
+      List<Map<String, dynamic>>? relevantDTCs;
+      
+      if (_containsDTCKeywords(question)) {
+        // Extract DTC codes from the question
+        final dtcCodes = _extractDTCCodes(question);
+        if (dtcCodes.isNotEmpty) {
+          relevantDTCs = [];
+          for (final code in dtcCodes) {
+            final dtc = await _databaseService.getDTCByCode(code);
+            if (dtc != null) {
+              relevantDTCs.add(dtc);
+            }
+          }
+        }
+        
+        // Also search for any relevant DTCs based on keywords
+        final searchTerms = _extractDTCSearchTerms(question);
+        if (searchTerms.isNotEmpty) {
+          for (final term in searchTerms) {
+            final searchResults = await _databaseService.searchGoldBlackDTCs(term);
+            relevantDTCs ??= [];
+            for (final dtc in searchResults.take(10)) {
+              if (!relevantDTCs.any((d) => d['dtc_code'] == dtc['dtc_code'])) {
+                relevantDTCs.add(dtc);
+              }
+            }
+          }
+        }
+        
+        // Get summary context if asking general DTC questions
+        if (relevantDTCs == null || relevantDTCs.isEmpty) {
+          goldBlackContext = await _databaseService.getGoldBlackSummaryForAI();
+        }
+      }
+
       final answer = await _ollamaService.answerQuestion(
         question,
         contextSystems,
+        goldBlackContext: goldBlackContext,
+        relevantDTCs: relevantDTCs,
       );
       _errorMessage = null;
       _isLoading = false;
@@ -287,6 +326,41 @@ class CalibrationProvider extends ChangeNotifier {
     }
     
     return null;
+  }
+
+  bool _containsDTCKeywords(String question) {
+    final dtcKeywords = [
+      'dtc', 'fault code', 'trouble code', 'diagnostic code', 'error code',
+      'gold list', 'black list', 'goldlist', 'blacklist',
+      'p0', 'p1', 'p2', 'p3', 'b0', 'b1', 'b2', 'c0', 'c1', 'u0', 'u1',
+      'obd', 'obd2', 'obdii', 'can bus'
+    ];
+    
+    final lowerQuestion = question.toLowerCase();
+    return dtcKeywords.any((keyword) => lowerQuestion.contains(keyword));
+  }
+
+  List<String> _extractDTCCodes(String question) {
+    // DTC codes typically follow patterns like P0XXX, B1XXX, C0XXX, U0XXX
+    final dtcPattern = RegExp(r'\b([PBCU][0-9][0-9A-F]{2,3})\b', caseSensitive: false);
+    final matches = dtcPattern.allMatches(question.toUpperCase());
+    return matches.map((m) => m.group(1)!).toList();
+  }
+
+  List<String> _extractDTCSearchTerms(String question) {
+    final lowerQuestion = question.toLowerCase();
+    final terms = <String>[];
+    
+    // Extract module names
+    final modules = ['airbag', 'srs', 'abs', 'esp', 'traction', 'engine', 'transmission', 
+                     'bcm', 'pcm', 'ecm', 'tcm', 'steering', 'brake', 'camera', 'radar'];
+    for (final module in modules) {
+      if (lowerQuestion.contains(module)) {
+        terms.add(module);
+      }
+    }
+    
+    return terms;
   }
 
   Future<void> searchSystems(String query) async {
